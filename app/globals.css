@@ -1,15 +1,1 @@
 @import "tailwindcss";
-
-body {
-  font-family: var(--font-sans);
-  background-color: white;
-}
-
-h1, h2, h3 {
-  font-family: var(--font-display);
-  letter-spacing: -0.5px;
-}
-
-code, pre {
-  font-family: var(--font-mono);
-}

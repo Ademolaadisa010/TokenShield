@@ -145,12 +145,12 @@ function Nav() {
         <div className="flex items-center gap-3">
           <a href="login" className="font-sans text-sm text-gray-600 hover:text-gray-900 transition-colors">Sign in</a>
           <motion.a
-            href="/register"
+            href="/analyse"
             whileHover={{ scale: 1.03 }}
             whileTap={{ scale: 0.97 }}
             className="font-sans text-sm font-semibold bg-emerald-600 text-white px-4 py-2 rounded-full hover:bg-emerald-700 transition-colors"
           >
-            Get started free
+            Analyse Token
           </motion.a>
         </div>
       </div>
@@ -238,12 +238,12 @@ function Hero() {
             Analyze a token for free →
           </motion.a>
           <motion.a
-            href="#howitworks"
+            href="/advisor-page"
             whileHover={{ scale: 1.03 }}
             whileTap={{ scale: 0.97 }}
             className="font-sans font-medium text-base text-gray-600 border border-gray-200 px-8 py-4 rounded-2xl hover:border-gray-300 hover:bg-gray-50 transition-all"
           >
-            Watch demo
+            AI Advisor
           </motion.a>
         </motion.div>
 
