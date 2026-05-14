@@ -777,7 +777,7 @@ function Nav() {
             <span className="text-base">🧠</span>
             <span className="font-sans text-xs text-gray-500 font-medium">FOMO Guard</span>
           </div>
-          <a href="/" className="font-sans text-xs font-medium text-gray-400 hover:text-gray-700 transition-colors">← Home</a>
+          <a href="/dashboard" className="font-sans text-xs font-medium text-gray-400 hover:text-gray-700 transition-colors">← Home</a>
         </div>
       </div>
     </nav>

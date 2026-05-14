@@ -780,7 +780,7 @@ export default function AnalyzePage() {
               <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
               <span className="font-sans text-xs text-gray-400">Live · DexScreener</span>
             </div>
-            <a href="/" className="font-sans text-xs font-medium text-gray-500 hover:text-gray-900 transition-colors">← Back</a>
+            <a href="/dashboard" className="font-sans text-xs font-medium text-gray-500 hover:text-gray-900 transition-colors">← Back</a>
           </div>
         </div>
       </nav>

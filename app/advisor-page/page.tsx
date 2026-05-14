@@ -529,7 +529,7 @@ export default function AdvisorPage() {
                 Clear chat
               </button>
             )}
-            <a href="/" className="font-sans text-xs font-medium text-gray-400 hover:text-gray-700 transition-colors">← Home</a>
+            <a href="/dashboard" className="font-sans text-xs font-medium text-gray-400 hover:text-gray-700 transition-colors">← Home</a>
           </div>
         </div>
       </nav>

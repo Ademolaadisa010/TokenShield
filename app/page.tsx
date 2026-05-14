@@ -137,20 +137,20 @@ function Nav() {
         </div>
         <div className="hidden md:flex items-center gap-8">
           {["Features", "How it works", "Safety Score", "Pricing"].map((item) => (
-            <a key={item} href="#" className="font-sans text-sm text-gray-500 hover:text-gray-900 transition-colors duration-200">
+            <a key={item} href="#howitworks" className="font-sans text-sm text-gray-500 hover:text-gray-900 transition-colors duration-200">
               {item}
             </a>
           ))}
         </div>
         <div className="flex items-center gap-3">
-          <a href="login" className="font-sans text-sm text-gray-600 hover:text-gray-900 transition-colors">Sign in</a>
+          {/* <a href="login" className="font-sans text-sm text-gray-600 hover:text-gray-900 transition-colors">Sign in</a> */}
           <motion.a
-            href="/analyse"
+            href="/dashboard"
             whileHover={{ scale: 1.03 }}
             whileTap={{ scale: 0.97 }}
             className="font-sans text-sm font-semibold bg-emerald-600 text-white px-4 py-2 rounded-full hover:bg-emerald-700 transition-colors"
           >
-            Analyse Token
+            Dashboard
           </motion.a>
         </div>
       </div>
@@ -238,12 +238,12 @@ function Hero() {
             Analyze a token for free →
           </motion.a>
           <motion.a
-            href="/advisor-page"
+            href="/dashboard"
             whileHover={{ scale: 1.03 }}
             whileTap={{ scale: 0.97 }}
             className="font-sans font-medium text-base text-gray-600 border border-gray-200 px-8 py-4 rounded-2xl hover:border-gray-300 hover:bg-gray-50 transition-all"
           >
-            AI Advisor
+            Dashboard
           </motion.a>
         </motion.div>
 
@@ -795,12 +795,12 @@ function CTA() {
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
               <motion.a
-                href="/register"
+                href="/dashboard"
                 whileHover={{ scale: 1.04, boxShadow: "0 20px 40px rgba(16,185,129,0.3)" }}
                 whileTap={{ scale: 0.97 }}
                 className="font-sans font-bold text-base bg-emerald-500 text-white px-8 py-4 rounded-xl hover:bg-emerald-400 transition-colors"
               >
-                Start free
+                Dashboard
               </motion.a>
               <motion.a
                 href="/analyse"
