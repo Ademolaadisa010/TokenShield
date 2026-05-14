@@ -604,7 +604,7 @@ function ResultPanel({ token }: { token: TokenData }) {
       {/* ── Actions ── */}
       <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.75, ease: EASE }}
         className="flex flex-col sm:flex-row gap-3">
-        <a href="/advisor-page" target="_blank" rel="noopener noreferrer"
+        <a href="/advisor-page" rel="noopener noreferrer"
           className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-sans font-bold text-sm h-11 rounded-xl transition-colors flex items-center justify-center gap-1.5">
           AI Advisor ↗
         </a>
