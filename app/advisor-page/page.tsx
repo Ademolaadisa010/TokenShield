@@ -6,6 +6,12 @@ import { motion, AnimatePresence } from "framer-motion";
 // ─── Easing ───────────────────────────────────────────────────────────────────
 const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
 
+// ─── Gemini Config ────────────────────────────────────────────────────────────
+// Replace with your actual Gemini API key
+const GEMINI_API_KEY = "AIzaSyDzT2TKcOClV-lGHH1Pj_YxLZXoAD6z_nc";
+const GEMINI_MODEL = "gemini-2.5-flash"; // or "gemini-1.5-pro" for more power
+const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 type Role = "user" | "assistant";
 type MsgStatus = "streaming" | "done" | "error";
@@ -16,7 +22,7 @@ interface Message {
   content: string;
   status: MsgStatus;
   timestamp: Date;
-  tags?: string[]; // risk tags extracted from AI reply
+  tags?: string[];
 }
 
 interface TokenContext {
@@ -60,20 +66,20 @@ Format rules:
 
 // ─── Starter prompts ──────────────────────────────────────────────────────────
 const STARTERS = [
-  { icon: "🤔", label: "Should I buy this token?",          msg: "I'm thinking of buying a token I saw trending. How do I know if it's safe?" },
-  { icon: "💸", label: "Why did my trade fail?",            msg: "My transaction failed and I lost gas fees. It said 'insufficient output amount'. What happened?" },
-  { icon: "🍯", label: "What is a honeypot token?",         msg: "What exactly is a honeypot token and how do I detect one before buying?" },
-  { icon: "💧", label: "Low liquidity explained",           msg: "Can you explain what low liquidity means and why it's dangerous for my trade?" },
-  { icon: "📊", label: "How to size positions safely",      msg: "How should I decide how much of my portfolio to put into a new altcoin?" },
-  { icon: "🏃", label: "How to spot a rug pull early",      msg: "What are the earliest warning signs that a token is about to rug pull?" },
+  { icon: "🤔", label: "Should I buy this token?",        msg: "I'm thinking of buying a token I saw trending. How do I know if it's safe?" },
+  { icon: "💸", label: "Why did my trade fail?",          msg: "My transaction failed and I lost gas fees. It said 'insufficient output amount'. What happened?" },
+  { icon: "🍯", label: "What is a honeypot token?",       msg: "What exactly is a honeypot token and how do I detect one before buying?" },
+  { icon: "💧", label: "Low liquidity explained",         msg: "Can you explain what low liquidity means and why it's dangerous for my trade?" },
+  { icon: "📊", label: "How to size positions safely",    msg: "How should I decide how much of my portfolio to put into a new altcoin?" },
+  { icon: "🏃", label: "How to spot a rug pull early",   msg: "What are the earliest warning signs that a token is about to rug pull?" },
 ];
 
 // ─── Quick context tokens ──────────────────────────────────────────────────────
 const MOCK_TOKENS: TokenContext[] = [
-  { symbol: "PEPE",  name: "Pepe Coin",  price: "$0.0000134", change24h: -8.2,  liquidity: 122000000, volume24h: 680000000, riskScore: 74, riskLevel: "High",     chain: "ethereum" },
-  { symbol: "SOL",   name: "Solana",     price: "$178",       change24h: 5.7,   liquidity: 3800000000, volume24h: 2900000000, riskScore: 38, riskLevel: "Medium",  chain: "solana"   },
-  { symbol: "WIF",   name: "dogwifhat",  price: "$2.31",      change24h: -12.4, liquidity: 45000000,  volume24h: 320000000,  riskScore: 68, riskLevel: "High",     chain: "solana"   },
-  { symbol: "BTC",   name: "Bitcoin",    price: "$67,420",    change24h: 2.4,   liquidity: 42100000000, volume24h: 28300000000, riskScore: 6, riskLevel: "Safe",  chain: "bitcoin"  },
+  { symbol: "PEPE",  name: "Pepe Coin",  price: "$0.0000134", change24h: -8.2,  liquidity: 122000000,   volume24h: 680000000,   riskScore: 74, riskLevel: "High",   chain: "ethereum" },
+  { symbol: "SOL",   name: "Solana",     price: "$178",       change24h: 5.7,   liquidity: 3800000000,  volume24h: 2900000000,  riskScore: 38, riskLevel: "Medium", chain: "solana"   },
+  { symbol: "WIF",   name: "dogwifhat",  price: "$2.31",      change24h: -12.4, liquidity: 45000000,    volume24h: 320000000,   riskScore: 68, riskLevel: "High",   chain: "solana"   },
+  { symbol: "BTC",   name: "Bitcoin",    price: "$67,420",    change24h: 2.4,   liquidity: 42100000000, volume24h: 28300000000, riskScore: 6,  riskLevel: "Safe",   chain: "bitcoin"  },
 ];
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -87,10 +93,10 @@ function fmt(n: number): string {
 }
 
 function riskColor(level: string) {
-  return level === "Safe" ? "text-emerald-600 bg-emerald-50 border-emerald-200"
-    : level === "Low"    ? "text-teal-600 bg-teal-50 border-teal-200"
-    : level === "Medium" ? "text-amber-600 bg-amber-50 border-amber-200"
-    : level === "High"   ? "text-orange-600 bg-orange-50 border-orange-200"
+  return level === "Safe"   ? "text-emerald-600 bg-emerald-50 border-emerald-200"
+    : level === "Low"       ? "text-teal-600 bg-teal-50 border-teal-200"
+    : level === "Medium"    ? "text-amber-600 bg-amber-50 border-amber-200"
+    : level === "High"      ? "text-orange-600 bg-orange-50 border-orange-200"
     : "text-red-600 bg-red-50 border-red-200";
 }
 
@@ -106,11 +112,31 @@ function formatTime(d: Date) {
   return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-// Parse markdown-like formatting into JSX-safe HTML
 function parseContent(text: string): string {
   return text
     .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
     .replace(/\n/g, '<br/>');
+}
+
+// ─── Gemini API Call ──────────────────────────────────────────────────────────
+// Converts internal message history to Gemini's "contents" format.
+// Gemini uses "user" and "model" roles (not "assistant").
+// The system prompt is injected as the first user turn + a model acknowledgement.
+function buildGeminiContents(
+  history: { role: Role; content: string }[],
+  systemPrompt: string
+) {
+  const contents: { role: string; parts: { text: string }[] }[] = [
+    // Gemini doesn't have a native system role in the basic API;
+    // inject it as the first exchange so the model respects it.
+    { role: "user",  parts: [{ text: `[SYSTEM INSTRUCTIONS — follow these throughout our conversation]\n\n${systemPrompt}` }] },
+    { role: "model", parts: [{ text: "Understood. I'm TokenShield AI Trade Advisor, ready to provide honest, safety-first crypto analysis. How can I help?" }] },
+    ...history.map(m => ({
+      role: m.role === "assistant" ? "model" : "user",
+      parts: [{ text: m.content }],
+    })),
+  ];
+  return contents;
 }
 
 // ─── Icons ────────────────────────────────────────────────────────────────────
@@ -191,7 +217,6 @@ function MessageBubble({ msg }: { msg: Message }) {
           )}
         </div>
 
-        {/* Tags */}
         {msg.tags && msg.tags.length > 0 && (
           <div className="flex flex-wrap gap-1.5">
             {msg.tags.map(tag => (
@@ -248,7 +273,6 @@ function TokenContextCard({ token, onRemove }: { token: TokenContext; onRemove: 
         ))}
       </div>
 
-      {/* Risk score bar */}
       <div>
         <div className="flex justify-between mb-1">
           <span className="font-sans text-[10px] text-gray-400">Risk score</span>
@@ -272,11 +296,11 @@ function TokenContextCard({ token, onRemove }: { token: TokenContext; onRemove: 
 // ─── Sidebar panels ───────────────────────────────────────────────────────────
 function SidebarCapabilities() {
   const caps = [
-    { icon: "🔍", title: "Trade evaluation",     desc: "Tell the AI what you want to buy — it will assess the risk" },
-    { icon: "💧", title: "Liquidity analysis",   desc: "Understand pool depth, slippage, and exit risk" },
-    { icon: "🍯", title: "Scam detection",        desc: "Learn to identify honeypots, rug pulls, and wash trading" },
-    { icon: "📐", title: "Position sizing",       desc: "Get guidance on how much capital to risk per trade" },
-    { icon: "🧠", title: "FOMO detection",        desc: "The AI will flag emotional reasoning in your messages" },
+    { icon: "🔍", title: "Trade evaluation",      desc: "Tell the AI what you want to buy — it will assess the risk" },
+    { icon: "💧", title: "Liquidity analysis",    desc: "Understand pool depth, slippage, and exit risk" },
+    { icon: "🍯", title: "Scam detection",         desc: "Learn to identify honeypots, rug pulls, and wash trading" },
+    { icon: "📐", title: "Position sizing",        desc: "Get guidance on how much capital to risk per trade" },
+    { icon: "🧠", title: "FOMO detection",         desc: "The AI will flag emotional reasoning in your messages" },
     { icon: "❌", title: "Trade failure explainer", desc: "Understand why your transaction failed and how to fix it" },
   ];
 
@@ -377,7 +401,6 @@ export default function AdvisorPage() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // Auto-resize textarea
   function handleInputChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
     setInput(e.target.value);
     e.target.style.height = "auto";
@@ -407,48 +430,64 @@ export default function AdvisorPage() {
     setShowStarters(false);
     if (inputRef.current) inputRef.current.style.height = "auto";
 
-    const userMsg: Message = { id: uid(), role: "user", content, status: "done", timestamp: new Date() };
+    const userMsg: Message = { id: uid(), role: "user",      content, status: "done",      timestamp: new Date() };
     const asstMsg: Message = { id: uid(), role: "assistant", content: "", status: "streaming", timestamp: new Date() };
 
     setMessages(prev => [...prev, userMsg, asstMsg]);
     setIsStreaming(true);
 
     try {
+      // Build history including the new user message
       const history = [...messages, userMsg].map(m => ({ role: m.role, content: m.content }));
 
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
+      // ── Gemini API request ──────────────────────────────────────────────────
+      const res = await fetch(GEMINI_API_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 1000,
-          system: buildSystemPrompt(),
-          messages: history,
+          contents: buildGeminiContents(history, buildSystemPrompt()),
+          generationConfig: {
+            maxOutputTokens: 1000,
+            temperature: 0.7,
+          },
         }),
       });
 
-      if (!res.ok) throw new Error(`API ${res.status}`);
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        throw new Error(errBody?.error?.message ?? `Gemini API ${res.status}`);
+      }
+
       const data = await res.json();
-      const reply = data.content?.filter((b: { type: string }) => b.type === "text")
-        .map((b: { text: string }) => b.text).join("") ?? "";
+
+      // ── Parse Gemini response ───────────────────────────────────────────────
+      // Response shape: data.candidates[0].content.parts[0].text
+      const reply: string =
+        data?.candidates?.[0]?.content?.parts
+          ?.filter((p: { text?: string }) => p.text)
+          ?.map((p: { text: string }) => p.text)
+          ?.join("") ?? "";
+
+      if (!reply) throw new Error("Empty response from Gemini");
 
       // Extract risk tags from reply
       const tags: string[] = [];
-      if (/honeypot|scam|rug/i.test(reply))           tags.push("🍯 Honeypot risk");
-      if (/liquidity|slippage/i.test(reply))           tags.push("💧 Liquidity risk");
-      if (/fomo|emotional|impulse/i.test(reply))       tags.push("🧠 FOMO detected");
-      if (/position size|allocation/i.test(reply))     tags.push("📐 Position sizing");
-      if (/safe|low risk|solid/i.test(reply))          tags.push("✓ Low risk signal");
-      if (/critical|danger|avoid|do not buy/i.test(reply)) tags.push("🚨 Critical warning");
+      if (/honeypot|scam|rug/i.test(reply))                  tags.push("🍯 Honeypot risk");
+      if (/liquidity|slippage/i.test(reply))                 tags.push("💧 Liquidity risk");
+      if (/fomo|emotional|impulse/i.test(reply))             tags.push("🧠 FOMO detected");
+      if (/position size|allocation/i.test(reply))           tags.push("📐 Position sizing");
+      if (/safe|low risk|solid/i.test(reply))                tags.push("✓ Low risk signal");
+      if (/critical|danger|avoid|do not buy/i.test(reply))   tags.push("🚨 Critical warning");
 
       setMessages(prev => prev.map(m =>
         m.id === asstMsg.id ? { ...m, content: reply, status: "done", tags } : m
       ));
     } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : "Unknown error";
       setMessages(prev => prev.map(m =>
         m.id === asstMsg.id ? {
           ...m,
-          content: "Connection error. Please check your network and try again.",
+          content: `Connection error: ${errorMsg}. Please check your API key and network, then try again.`,
           status: "error",
         } : m
       ));
@@ -480,8 +519,9 @@ export default function AdvisorPage() {
             <span className="font-display font-bold text-gray-900 text-[15px]">TokenShield</span>
           </a>
           <div className="hidden sm:flex items-center gap-1.5">
-            <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-            <span className="font-sans text-xs font-medium text-gray-500">AI Trade Advisor · Live</span>
+            <div className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
+            {/* Updated badge to show Gemini */}
+            <span className="font-sans text-xs font-medium text-gray-500">Gemini AI Trade Advisor · Live</span>
           </div>
           <div className="flex items-center gap-3">
             {messages.length > 0 && (
@@ -512,11 +552,12 @@ export default function AdvisorPage() {
                   <ShieldIcon className="w-10 h-10 text-emerald-500" />
                 </motion.div>
                 <h2 className="font-display font-bold text-gray-900 text-2xl mb-2">AI Trade Advisor</h2>
-                <p className="font-sans text-gray-400 text-sm leading-relaxed max-w-sm mb-8">
+                <p className="font-sans text-gray-400 text-sm leading-relaxed max-w-sm mb-1">
                   Ask me anything about a token, trade decision, or crypto risk. I'll give you honest, safety-first analysis — not hype.
                 </p>
+                {/* Gemini badge */}
+                <p className="font-sans text-xs text-blue-500 mb-8">Powered by Google Gemini</p>
 
-                {/* Starter prompts */}
                 <AnimatePresence>
                   {showStarters && (
                     <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
@@ -544,7 +585,6 @@ export default function AdvisorPage() {
             {/* Messages */}
             {!isEmpty && (
               <div className="flex flex-col gap-5 py-4">
-                {/* Token context banner */}
                 <AnimatePresence>
                   {tokenCtx && (
                     <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }}
@@ -566,7 +606,7 @@ export default function AdvisorPage() {
             )}
           </div>
 
-          {/* Token context card (above input) */}
+          {/* Token context card (above input, when empty) */}
           <AnimatePresence>
             {tokenCtx && isEmpty && (
               <TokenContextCard token={tokenCtx} onRemove={() => setTokenCtx(null)} />
@@ -575,7 +615,6 @@ export default function AdvisorPage() {
 
           {/* Input area */}
           <div className="bg-white border border-gray-200 rounded-2xl p-3 mt-3 shadow-sm">
-            {/* Token context pill */}
             <AnimatePresence>
               {tokenCtx && !isEmpty && (
                 <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }}
@@ -592,7 +631,6 @@ export default function AdvisorPage() {
             </AnimatePresence>
 
             <div className="flex items-end gap-2.5">
-              {/* Token context button */}
               <button onClick={() => setShowPicker(true)}
                 title="Load token context"
                 className={`w-9 h-9 flex-shrink-0 rounded-xl flex items-center justify-center transition-all ${
@@ -615,13 +653,11 @@ export default function AdvisorPage() {
                 style={{ minHeight: "36px", maxHeight: "140px" }}
               />
 
-              {/* FOMO check button */}
               <a href="/fomo" title="Run FOMO check"
                 className="w-9 h-9 flex-shrink-0 rounded-xl flex items-center justify-center bg-amber-50 text-amber-500 hover:bg-amber-100 transition-colors">
                 <span className="text-base">⏳</span>
               </a>
 
-              {/* Send button */}
               <motion.button
                 onClick={() => sendMessage()}
                 disabled={isStreaming || !input.trim()}
@@ -641,7 +677,6 @@ export default function AdvisorPage() {
               </motion.button>
             </div>
 
-            {/* Footer hints */}
             <div className="flex items-center justify-between mt-2 px-0.5">
               <span className="font-sans text-[10px] text-gray-300">Enter to send · Shift+Enter for newline</span>
               <span className="font-sans text-[10px] text-gray-300">Not financial advice</span>
@@ -652,7 +687,6 @@ export default function AdvisorPage() {
         {/* ─ Sidebar ─ */}
         <div className="hidden xl:flex flex-col gap-4 w-72 flex-shrink-0">
 
-          {/* Context loader */}
           <motion.div initial={{ opacity: 0, x: 16 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.15, ease: EASE }}
             className="bg-white border border-gray-100 rounded-2xl p-5">
             <h3 className="font-display font-bold text-gray-900 text-sm mb-3">Token context</h3>
@@ -675,12 +709,10 @@ export default function AdvisorPage() {
             </AnimatePresence>
           </motion.div>
 
-          {/* Capabilities */}
           <motion.div initial={{ opacity: 0, x: 16 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.25, ease: EASE }}>
             <SidebarCapabilities />
           </motion.div>
 
-          {/* Quick links */}
           <motion.div initial={{ opacity: 0, x: 16 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.35, ease: EASE }}
             className="bg-white border border-gray-100 rounded-2xl p-5">
             <h3 className="font-display font-bold text-gray-900 text-sm mb-3">Other tools</h3>
@@ -702,7 +734,6 @@ export default function AdvisorPage() {
             </div>
           </motion.div>
 
-          {/* Disclaimer */}
           <motion.div initial={{ opacity: 0, x: 16 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.45, ease: EASE }}>
             <SidebarDisclaimer />
           </motion.div>

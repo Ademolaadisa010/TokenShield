@@ -605,15 +605,15 @@ function ResultPanel({ token }: { token: TokenData }) {
       <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.75, ease: EASE }}
         className="flex flex-col sm:flex-row gap-3">
         <a href="/advisor-page" target="_blank" rel="noopener noreferrer"
-          className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-sans font-bold text-sm h-11 rounded-xl transition-colors flex items-center justify-center gap-1.5">
+          className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-sans font-bold text-sm h-11 rounded-xl transition-colors flex items-center justify-center gap-1.5">
           AI Advisor ↗
         </a>
         <button onClick={() => navigator.clipboard?.writeText(`${token.name} (${token.symbol}) — Risk score: ${token.riskScore}/100 (${token.riskLevel}) | TokenShield`)}
-          className="flex-1 border border-gray-200 hover:bg-gray-50 text-gray-700 font-sans font-medium text-sm h-11 rounded-xl transition-colors">
+          className="flex-1 py-3 border border-gray-200 hover:bg-gray-50 text-gray-700 font-sans font-medium text-sm h-11 rounded-xl transition-colors">
           Copy report summary
         </button>
         <button onClick={() => window.location.href = "/fomo"}
-          className="flex-1 border border-amber-200 hover:bg-amber-50 text-amber-700 font-sans font-medium text-sm h-11 rounded-xl transition-colors">
+          className="flex-1 py-3 border border-amber-200 hover:bg-amber-50 text-amber-700 font-sans font-medium text-sm h-11 rounded-xl transition-colors">
           ⏳ FOMO check before trading
         </button>
       </motion.div>
