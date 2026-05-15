@@ -6,9 +6,8 @@ import { motion, AnimatePresence } from "framer-motion";
 // ─── Easing ───────────────────────────────────────────────────────────────────
 const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
 
-// ─── Gemini Config ────────────────────────────────────────────────────────────
-// Replace with your actual Gemini API key
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+
+const GEMINI_API_KEY = process.env.NEXT_PUBLIC_GEMINI_API_KEY;
 const GEMINI_MODEL = "gemini-2.5-flash"; // or "gemini-1.5-pro" for more power
 const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
 
