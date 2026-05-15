@@ -9,6 +9,7 @@ const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
 // ─── Types ────────────────────────────────────────────────────────────────────
 type RiskLevel = "Safe" | "Low" | "Medium" | "High" | "Critical" | "Unknown";
 type SortKey = "allocation" | "riskScore" | "valueUsd" | "priceChange24h";
+type ConnectMethod = "extension" | "deeplink" | "in-app";
 
 interface Asset {
   id: string;
@@ -36,29 +37,90 @@ interface WalletState {
   loading: boolean;
   error: string | null;
   phantomReady: boolean;
+  connectMethod: ConnectMethod | null;
 }
 
-// ─── Phantom detection — waits up to 3s for extension to inject ───────────────
-function getPhantom(): Promise<{ isPhantom: boolean; connect: (opts?: { onlyIfTrusted?: boolean }) => Promise<{ publicKey: { toString: () => string } }>; disconnect: () => Promise<void>; on: (e: string, cb: (k: unknown) => void) => void; off: (e: string, cb: (k: unknown) => void) => void } | null> {
-  return new Promise((resolve) => {
-    // Already injected
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const win = window as any;
-    if (win.phantom?.solana?.isPhantom) { resolve(win.phantom.solana); return; }
-    if (win.solana?.isPhantom) { resolve(win.solana); return; }
+// ─── Environment detection ────────────────────────────────────────────────────
+function isMobile(): boolean {
+  if (typeof navigator === "undefined") return false;
+  return /android|iphone|ipad|ipod|mobile/i.test(navigator.userAgent);
+}
 
-    // Wait up to 3 seconds for the extension to inject
+// Phantom's in-app browser injects window.phantom or window.solana too,
+// but also sets a flag we can check.
+function isPhantomInAppBrowser(): boolean {
+  const win = window as any;
+  return !!(win.phantom?.solana?.isPhantom) && isMobile();
+}
+
+function getExtensionPhantom(): any | null {
+  const win = window as any;
+  if (win.phantom?.solana?.isPhantom) return win.phantom.solana;
+  if (win.solana?.isPhantom) return win.solana;
+  return null;
+}
+
+// ─── Phantom deep link helpers ────────────────────────────────────────────────
+// These implement the Phantom mobile "browser" connect flow.
+// https://docs.phantom.com/phantom-deeplinks/provider-methods/connect
+//
+// Flow:
+// 1. App generates an ephemeral keypair (dappKeyPair)
+// 2. App redirects to phantom://ul/v1/connect?... with its public key + redirect URL
+// 3. Phantom signs a session token and redirects back with encrypted payload
+// 4. App decrypts with its private key → gets the wallet public key
+//
+// For simplicity in a Next.js app we store the dapp keypair in sessionStorage
+// and handle the redirect in a useEffect that reads URL params on mount.
+//
+// NOTE: Full encryption requires @solana/web3.js + tweetnacl. We use a lightweight
+// approach: pass the dapp's ed25519 public key as a hex string and use the
+// phantom_encryption_public_key returned to decrypt via TweetNaCl on the callback.
+
+// We'll use the simpler "provider" deeplink which doesn't require encryption
+// for read-only connections (connect only, no signing).
+// For connect-only we can use the "connect" deeplink with just a redirect URL.
+// Phantom will return the wallet address as a query param.
+
+function buildPhantomDeepLink(redirectUrl: string): string {
+  const params = new URLSearchParams({
+    app_url: window.location.origin,
+    dapp_encryption_public_key: "placeholder", // real apps need nacl keypair
+    redirect_link: redirectUrl,
+    cluster: "mainnet-beta",
+  });
+  // Use Universal Links on iOS, phantom:// on Android
+  const isIOS = /ipad|iphone|ipod/i.test(navigator.userAgent);
+  const base = isIOS
+    ? "https://phantom.app/ul/v1/connect"
+    : "phantom://ul/v1/connect";
+  return `${base}?${params.toString()}`;
+}
+
+// Simpler approach: use Phantom's "browse" deeplink to open this page
+// inside Phantom's in-app browser, which DOES inject window.solana.
+function buildPhantomBrowseLink(): string {
+  const pageUrl = encodeURIComponent(window.location.href);
+  const isIOS = /ipad|iphone|ipod/i.test(navigator.userAgent);
+  // Universal link (works on both iOS and Android, falls back to app store)
+  return `https://phantom.app/ul/browse/${pageUrl}?ref=${encodeURIComponent(window.location.origin)}`;
+}
+
+// ─── Phantom extension — wait for injection ───────────────────────────────────
+function waitForPhantom(timeoutMs = 3000): Promise<any | null> {
+  return new Promise(resolve => {
+    const existing = getExtensionPhantom();
+    if (existing) { resolve(existing); return; }
     let tries = 0;
     const id = setInterval(() => {
-      tries++;
-      if (win.phantom?.solana?.isPhantom) { clearInterval(id); resolve(win.phantom.solana); return; }
-      if (win.solana?.isPhantom) { clearInterval(id); resolve(win.solana); return; }
-      if (tries >= 30) { clearInterval(id); resolve(null); }
+      const p = getExtensionPhantom();
+      if (p) { clearInterval(id); resolve(p); return; }
+      if (++tries >= timeoutMs / 100) { clearInterval(id); resolve(null); }
     }, 100);
   });
 }
 
-// ─── Solana RPC helpers ───────────────────────────────────────────────────────
+// ─── Solana RPC ───────────────────────────────────────────────────────────────
 const SOLANA_RPC = "https://api.mainnet-beta.solana.com";
 
 async function rpc(method: string, params: unknown[]) {
@@ -77,11 +139,7 @@ async function getSolBalance(pubkey: string): Promise<number> {
   return result.value / 1e9;
 }
 
-interface TokenAccountInfo {
-  mint: string;
-  amount: number;
-  decimals: number;
-}
+interface TokenAccountInfo { mint: string; amount: number; decimals: number; }
 
 async function getTokenAccounts(pubkey: string): Promise<TokenAccountInfo[]> {
   const result = await rpc("getTokenAccountsByOwner", [
@@ -89,8 +147,8 @@ async function getTokenAccounts(pubkey: string): Promise<TokenAccountInfo[]> {
     { programId: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" },
     { encoding: "jsonParsed", commitment: "confirmed" },
   ]);
-  return result.value
-    .map((acc: { account: { data: { parsed: { info: { mint: string; tokenAmount: { uiAmount: number; decimals: number } } } } } }) => {
+  return (result.value ?? [])
+    .map((acc: any) => {
       const info = acc.account.data.parsed.info;
       return { mint: info.mint, amount: info.tokenAmount.uiAmount, decimals: info.tokenAmount.decimals };
     })
@@ -99,29 +157,22 @@ async function getTokenAccounts(pubkey: string): Promise<TokenAccountInfo[]> {
 
 // ─── DexScreener ─────────────────────────────────────────────────────────────
 interface DexToken {
-  priceUsd: number;
-  change24h: number;
-  liquidity: number;
-  volume24h: number;
-  symbol: string;
-  name: string;
-  dexUrl: string;
+  priceUsd: number; change24h: number; liquidity: number;
+  volume24h: number; symbol: string; name: string; dexUrl: string;
 }
 
 async function fetchDexBatch(mints: string[]): Promise<Record<string, DexToken>> {
   const result: Record<string, DexToken> = {};
   const chunks: string[][] = [];
   for (let i = 0; i < mints.length; i += 30) chunks.push(mints.slice(i, i + 30));
-
-  await Promise.all(chunks.map(async (chunk) => {
+  await Promise.all(chunks.map(async chunk => {
     try {
       const res = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${chunk.join(",")}`, {
         headers: { Accept: "application/json" },
       });
       if (!res.ok) return;
       const data = await res.json();
-      if (!data.pairs) return;
-      for (const pair of data.pairs) {
+      for (const pair of (data.pairs ?? [])) {
         const mint = pair.baseToken?.address;
         if (!mint) continue;
         const liq = pair.liquidity?.usd ?? 0;
@@ -143,20 +194,22 @@ async function fetchDexBatch(mints: string[]): Promise<Record<string, DexToken>>
 }
 
 const KNOWN_SAFE: Record<string, { risk: RiskLevel; score: number }> = {
-  So11111111111111111111111111111111111111112:   { risk: "Medium", score: 38 },
-  EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1F: { risk: "Low",    score: 12 },
-  Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB: { risk: "Low",    score: 14 },
-  mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So: { risk: "Medium", score: 30 },
+  "So11111111111111111111111111111111111111112":   { risk: "Safe",   score: 6  },
+  "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1F": { risk: "Low",    score: 12 },
+  "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB": { risk: "Low",    score: 14 },
+  "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So": { risk: "Medium", score: 30 },
 };
+
+const NATIVE_SOL_MINT = "So11111111111111111111111111111111111111112";
 
 function computeRisk(liq: number, vol24h: number, mint: string): { risk: RiskLevel; score: number } {
   if (KNOWN_SAFE[mint]) return KNOWN_SAFE[mint];
   if (liq === 0 && vol24h === 0) return { risk: "Unknown", score: 50 };
   let score = 0;
-  if      (liq < 10_000)      score += 40;
-  else if (liq < 100_000)     score += 25;
-  else if (liq < 1_000_000)   score += 12;
-  else if (liq < 10_000_000)  score += 5;
+  if      (liq < 10_000)     score += 40;
+  else if (liq < 100_000)    score += 25;
+  else if (liq < 1_000_000)  score += 12;
+  else if (liq < 10_000_000) score += 5;
   const vr = liq > 0 ? vol24h / liq : 0;
   if      (vr < 0.01) score += 20;
   else if (vr < 0.05) score += 10;
@@ -165,7 +218,7 @@ function computeRisk(liq: number, vol24h: number, mint: string): { risk: RiskLev
   return { risk, score };
 }
 
-// ─── Risk Config ──────────────────────────────────────────────────────────────
+// ─── Risk config ──────────────────────────────────────────────────────────────
 const RC: Record<RiskLevel, { bg: string; text: string; border: string; bar: string; badge: string }> = {
   Safe:     { bg:"bg-emerald-50",  text:"text-emerald-700", border:"border-emerald-200", bar:"bg-emerald-500",  badge:"bg-emerald-100 text-emerald-800 border-emerald-200" },
   Low:      { bg:"bg-teal-50",     text:"text-teal-700",    border:"border-teal-200",    bar:"bg-teal-500",     badge:"bg-teal-100 text-teal-800 border-teal-200"           },
@@ -185,7 +238,7 @@ function fmtCompact(n: number): string {
 
 function fmtUsd(n: number): string {
   if (n <= 0) return "$0";
-  return new Intl.NumberFormat("en-US", { style:"currency", currency:"USD", maximumFractionDigits:2 }).format(n);
+  return new Intl.NumberFormat("en-US", { style:"currency", currency:"USD", maximumFractionDigits: n < 1 ? 4 : 2 }).format(n);
 }
 
 function shortKey(k: string) { return `${k.slice(0,4)}...${k.slice(-4)}`; }
@@ -218,7 +271,6 @@ function PhantomLogo({ size = 20 }: { size?: number }) {
   );
 }
 
-// ─── Sparkline (decorative) ───────────────────────────────────────────────────
 function Sparkline({ positive }: { positive: boolean }) {
   const pts = positive ? "0,18 10,14 20,16 30,10 40,12 56,4" : "0,4 10,8 20,6 30,12 40,10 56,18";
   const color = positive ? "#10b981" : "#ef4444";
@@ -235,45 +287,32 @@ function HealthDial({ score }: { score: number }) {
   const offset = arc - (score / 100) * arc;
   const color  = score >= 70 ? "#10b981" : score >= 45 ? "#f59e0b" : "#ef4444";
   const label  = score >= 70 ? "Good" : score >= 45 ? "Moderate" : "At Risk";
-
-  const ticks = Array.from({ length: 11 }, (_, i) => {
+  const ticks  = Array.from({ length: 11 }, (_, i) => {
     const angle = -225 + (i / 10) * 270;
     const rad = (angle * Math.PI) / 180;
-    return {
-      x1: 90 + 62 * Math.cos(rad), y1: 90 + 62 * Math.sin(rad),
-      x2: 90 + 70 * Math.cos(rad), y2: 90 + 70 * Math.sin(rad),
-      major: i % 5 === 0,
-    };
+    return { x1: 90+62*Math.cos(rad), y1: 90+62*Math.sin(rad), x2: 90+70*Math.cos(rad), y2: 90+70*Math.sin(rad), major: i%5===0 };
   });
-
   return (
     <div className="flex flex-col items-center">
       <div className="relative w-48 h-48">
         <svg viewBox="0 0 180 180" className="w-full h-full" style={{ transform:"rotate(-90deg)" }}>
           <circle cx="90" cy="90" r="84" fill="none" stroke={color} strokeWidth="1" strokeOpacity="0.12"/>
-          <circle cx="90" cy="90" r={r} fill="none" stroke="#f1f5f9" strokeWidth="10"
-            strokeDasharray={`${arc} ${circ}`} strokeLinecap="round"/>
+          <circle cx="90" cy="90" r={r} fill="none" stroke="#f1f5f9" strokeWidth="10" strokeDasharray={`${arc} ${circ}`} strokeLinecap="round"/>
           <motion.circle cx="90" cy="90" r={r} fill="none" stroke={color} strokeWidth="10" strokeLinecap="round"
-            strokeDasharray={`${arc} ${circ}`}
-            initial={{ strokeDashoffset: arc }}
-            animate={{ strokeDashoffset: offset }}
-            transition={{ duration: 1.8, ease: EASE, delay: 0.3 }}/>
-          {ticks.map((t, i) => (
+            strokeDasharray={`${arc} ${circ}`} initial={{ strokeDashoffset:arc }} animate={{ strokeDashoffset:offset }}
+            transition={{ duration:1.8, ease:EASE, delay:0.3 }}/>
+          {ticks.map((t,i) => (
             <line key={i} x1={t.x1} y1={t.y1} x2={t.x2} y2={t.y2}
-              stroke={t.major ? "#94a3b8" : "#e2e8f0"} strokeWidth={t.major ? 1.5 : 1} strokeLinecap="round"/>
+              stroke={t.major?"#94a3b8":"#e2e8f0"} strokeWidth={t.major?1.5:1} strokeLinecap="round"/>
           ))}
         </svg>
         <div className="absolute inset-0 flex flex-col items-center justify-center">
-          <motion.span initial={{ opacity:0, scale:0.4 }} animate={{ opacity:1, scale:1 }}
-            transition={{ duration:0.6, delay:1 }}
-            className="font-display font-bold text-5xl leading-none" style={{ color }}>
-            {score}
-          </motion.span>
+          <motion.span initial={{ opacity:0, scale:0.4 }} animate={{ opacity:1, scale:1 }} transition={{ duration:0.6, delay:1 }}
+            className="font-display font-bold text-5xl leading-none" style={{ color }}>{score}</motion.span>
           <span className="font-sans text-[11px] text-gray-400 mt-0.5 tracking-wide">out of 100</span>
         </div>
       </div>
-      <motion.div initial={{ opacity:0, y:8 }} animate={{ opacity:1, y:0 }} transition={{ delay:1.4 }}
-        className="flex items-center gap-2 -mt-1">
+      <motion.div initial={{ opacity:0, y:8 }} animate={{ opacity:1, y:0 }} transition={{ delay:1.4 }} className="flex items-center gap-2 -mt-1">
         <div className="w-2 h-2 rounded-full animate-pulse" style={{ background:color }}/>
         <span className="font-display font-bold text-gray-800">{label}</span>
       </motion.div>
@@ -285,7 +324,6 @@ function HealthDial({ score }: { score: number }) {
 function DonutChart({ assets }: { assets: Asset[] }) {
   const dist: Record<RiskLevel, number> = { Safe:0, Low:0, Medium:0, High:0, Critical:0, Unknown:0 };
   assets.forEach(a => { dist[a.riskLevel] += a.allocation; });
-
   const segs = [
     { level:"Safe"     as RiskLevel, pct:dist.Safe,     color:"#10b981" },
     { level:"Low"      as RiskLevel, pct:dist.Low,      color:"#14b8a6" },
@@ -294,11 +332,8 @@ function DonutChart({ assets }: { assets: Asset[] }) {
     { level:"Critical" as RiskLevel, pct:dist.Critical, color:"#ef4444" },
     { level:"Unknown"  as RiskLevel, pct:dist.Unknown,  color:"#94a3b8" },
   ].filter(s => s.pct > 0.5);
-
   const r = 48, cx = 60, cy = 60, circ = 2 * Math.PI * r;
   let cumPct = 0;
-  const safePct = Math.round(dist.Safe + dist.Low);
-
   return (
     <div className="flex items-center gap-6">
       <div className="relative flex-shrink-0">
@@ -308,32 +343,26 @@ function DonutChart({ assets }: { assets: Asset[] }) {
             const rotation = (cumPct / 100) * 360;
             cumPct += seg.pct;
             return (
-              <motion.circle key={seg.level} cx={cx} cy={cy} r={r}
-                fill="none" stroke={seg.color} strokeWidth="16"
+              <motion.circle key={seg.level} cx={cx} cy={cy} r={r} fill="none" stroke={seg.color} strokeWidth="16"
                 strokeDasharray={`${dashLen} ${circ}`}
                 style={{ transformOrigin:`${cx}px ${cy}px`, transform:`rotate(${rotation}deg)` }}
-                initial={{ strokeDashoffset:dashLen }}
-                animate={{ strokeDashoffset:0 }}
+                initial={{ strokeDashoffset:dashLen }} animate={{ strokeDashoffset:0 }}
                 transition={{ duration:0.9, delay:0.3+i*0.12, ease:EASE }}/>
             );
           })}
         </svg>
         <div className="absolute inset-0 flex flex-col items-center justify-center">
-          <span className="font-display font-bold text-gray-900 text-xl">{safePct}%</span>
+          <span className="font-display font-bold text-gray-900 text-xl">{Math.round(dist.Safe+dist.Low)}%</span>
           <span className="font-sans text-[9px] text-gray-400 uppercase tracking-wide">safe</span>
         </div>
       </div>
       <div className="flex flex-col gap-2 flex-1 min-w-0">
         {segs.map((seg, i) => (
-          <motion.div key={seg.level} initial={{ opacity:0, x:8 }} animate={{ opacity:1, x:0 }}
-            transition={{ delay:0.35+i*0.08, ease:EASE }}
-            className="flex items-center gap-2">
+          <motion.div key={seg.level} initial={{ opacity:0, x:8 }} animate={{ opacity:1, x:0 }} transition={{ delay:0.35+i*0.08, ease:EASE }} className="flex items-center gap-2">
             <div className="w-2 h-2 rounded-sm flex-shrink-0" style={{ background:seg.color }}/>
             <span className="font-sans text-xs text-gray-600 flex-1">{seg.level}</span>
             <div className="w-14 h-1.5 bg-gray-100 rounded-full overflow-hidden">
-              <motion.div initial={{ width:0 }} animate={{ width:`${seg.pct}%` }}
-                transition={{ duration:0.8, delay:0.4+i*0.08, ease:EASE }}
-                className="h-full rounded-full" style={{ background:seg.color }}/>
+              <motion.div initial={{ width:0 }} animate={{ width:`${seg.pct}%` }} transition={{ duration:0.8, delay:0.4+i*0.08, ease:EASE }} className="h-full rounded-full" style={{ background:seg.color }}/>
             </div>
             <span className="font-mono text-xs font-bold text-gray-700 w-7 text-right">{Math.round(seg.pct)}%</span>
           </motion.div>
@@ -354,11 +383,8 @@ function AssetRow({ asset, index }: { asset: Asset; index: number }) {
   const inView = useInView(ref, { once:true, margin:"-20px" });
   const rc = RC[asset.riskLevel];
   const pos = asset.priceChange24h >= 0;
-
   return (
-    <motion.tr ref={ref}
-      initial={{ opacity:0, x:-12 }}
-      animate={inView ? { opacity:1, x:0 } : {}}
+    <motion.tr ref={ref} initial={{ opacity:0, x:-12 }} animate={inView ? { opacity:1, x:0 } : {}}
       transition={{ duration:0.4, delay:index*0.05, ease:EASE }}
       className="group border-b border-gray-50 hover:bg-gray-50/60 transition-colors">
       <td className="py-3.5 pl-5 pr-4">
@@ -371,9 +397,7 @@ function AssetRow({ asset, index }: { asset: Asset; index: number }) {
               <p className="font-display font-bold text-gray-900 text-sm truncate max-w-[140px]">{asset.name}</p>
               {asset.isVerified && (
                 <span title="Known token" className="text-emerald-500 flex-shrink-0">
-                  <svg className="w-3 h-3" viewBox="0 0 12 12" fill="currentColor">
-                    <path d="M6 1l1.5 2.8 3.1.4-2.3 2.2.6 3.1L6 8l-2.9 1.5.6-3.1L1.4 4.2l3.1-.4z"/>
-                  </svg>
+                  <svg className="w-3 h-3" viewBox="0 0 12 12" fill="currentColor"><path d="M6 1l1.5 2.8 3.1.4-2.3 2.2.6 3.1L6 8l-2.9 1.5.6-3.1L1.4 4.2l3.1-.4z"/></svg>
                 </span>
               )}
             </div>
@@ -385,8 +409,7 @@ function AssetRow({ asset, index }: { asset: Asset; index: number }) {
         <div className="flex items-center gap-2.5">
           <div className="w-20 h-1.5 bg-gray-100 rounded-full overflow-hidden">
             <motion.div initial={{ width:0 }} animate={inView ? { width:`${Math.min(asset.allocation,100)}%` } : {}}
-              transition={{ duration:0.8, delay:index*0.05+0.2, ease:EASE }}
-              className={`h-full rounded-full ${rc.bar}`}/>
+              transition={{ duration:0.8, delay:index*0.05+0.2, ease:EASE }} className={`h-full rounded-full ${rc.bar}`}/>
           </div>
           <span className="font-mono text-xs font-bold text-gray-700 tabular-nums w-9">{asset.allocation.toFixed(1)}%</span>
         </div>
@@ -422,157 +445,238 @@ function AssetRow({ asset, index }: { asset: Asset; index: number }) {
         <div className="flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
           {asset.dexUrl && (
             <a href={asset.dexUrl} target="_blank" rel="noopener noreferrer" title="View on DexScreener"
-              className="w-7 h-7 rounded-lg bg-gray-100 hover:bg-emerald-100 hover:text-emerald-700 flex items-center justify-center text-gray-500 transition-colors text-xs">
-              📈
-            </a>
+              className="w-7 h-7 rounded-lg bg-gray-100 hover:bg-emerald-100 hover:text-emerald-700 flex items-center justify-center text-gray-500 transition-colors text-xs">📈</a>
           )}
           <a href="/advisor-page" title="Ask AI"
-            className="w-7 h-7 rounded-lg bg-gray-100 hover:bg-blue-100 hover:text-blue-700 flex items-center justify-center text-gray-500 transition-colors text-xs">
-            💬
-          </a>
+            className="w-7 h-7 rounded-lg bg-gray-100 hover:bg-blue-100 hover:text-blue-700 flex items-center justify-center text-gray-500 transition-colors text-xs">💬</a>
         </div>
       </td>
     </motion.tr>
   );
 }
 
-// ─── Empty / Not Connected ────────────────────────────────────────────────────
-function EmptyState({ onConnect, loading, phantomReady }: {
-  onConnect: () => void; loading: boolean; phantomReady: boolean;
+// ─── Connect Screen ───────────────────────────────────────────────────────────
+function ConnectScreen({
+  onConnectExtension,
+  onConnectMobile,
+  loading,
+  phantomReady,
+  mobile,
+}: {
+  onConnectExtension: () => void;
+  onConnectMobile: () => void;
+  loading: boolean;
+  phantomReady: boolean;
+  mobile: boolean;
 }) {
   return (
-    <div className="flex flex-col items-center justify-center py-24 px-6 text-center">
+    <div className="flex flex-col items-center justify-center py-20 px-6 text-center">
       <motion.div animate={{ y:[0,-8,0] }} transition={{ repeat:Infinity, duration:4, ease:"easeInOut" as const }}
         className="w-20 h-20 bg-purple-100 border border-purple-200 rounded-3xl flex items-center justify-center mb-6 shadow-sm">
         <PhantomLogo size={40}/>
       </motion.div>
 
-      <h2 className="font-display font-bold text-gray-900 text-2xl mb-2">Connect your Phantom wallet</h2>
-      <p className="font-sans text-gray-400 text-sm leading-relaxed max-w-sm mb-8">
-        View your real Solana token balances with live DexScreener prices and AI risk scores.
+      <h2 className="font-display font-bold text-gray-900 text-2xl mb-2">Connect Phantom Wallet</h2>
+      <p className="font-sans text-gray-400 text-sm leading-relaxed max-w-xs mb-8">
+        View your real Solana holdings with live DexScreener prices and AI-powered risk scores.
       </p>
 
-      {/* Status pill */}
-      <div className={`flex items-center gap-2 text-xs font-sans px-3 py-1.5 rounded-full border mb-6 ${
-        phantomReady
-          ? "bg-emerald-50 border-emerald-200 text-emerald-700"
-          : "bg-amber-50 border-amber-200 text-amber-700"
-      }`}>
-        <div className={`w-1.5 h-1.5 rounded-full ${phantomReady ? "bg-emerald-500 animate-pulse" : "bg-amber-500"}`}/>
-        {phantomReady ? "Phantom detected — ready to connect" : "Checking for Phantom extension…"}
+      <div className="w-full max-w-sm flex flex-col gap-3">
+
+        {/* ── Mobile: open in Phantom in-app browser ── */}
+        {mobile && (
+          <>
+            <motion.button
+              onClick={onConnectMobile}
+              disabled={loading}
+              whileHover={{ scale:1.02 }} whileTap={{ scale:0.97 }}
+              className="flex items-center justify-center gap-3 w-full bg-[#AB9FF2] hover:bg-[#9b8ee8] text-white font-sans font-bold text-sm px-6 py-4 rounded-2xl transition-colors shadow-sm shadow-purple-200 disabled:opacity-60"
+            >
+              {loading
+                ? <span className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"/>
+                : <PhantomLogo size={22}/>}
+              {loading ? "Opening Phantom…" : "Open in Phantom App"}
+            </motion.button>
+
+            <p className="font-sans text-xs text-gray-400 leading-relaxed">
+              This will open your page inside Phantom's built-in browser where your wallet is already connected.
+            </p>
+
+            {/* Divider */}
+            <div className="flex items-center gap-3 my-1">
+              <div className="flex-1 h-px bg-gray-200"/>
+              <span className="font-sans text-xs text-gray-400">or</span>
+              <div className="flex-1 h-px bg-gray-200"/>
+            </div>
+
+            <p className="font-sans text-xs text-gray-400">
+              Already inside Phantom browser?
+            </p>
+          </>
+        )}
+
+        {/* ── Extension connect (also shown as secondary on mobile for in-app browser) ── */}
+        <motion.button
+          onClick={onConnectExtension}
+          disabled={loading}
+          whileHover={{ scale:1.02 }} whileTap={{ scale:0.97 }}
+          className={`flex items-center justify-center gap-3 w-full font-sans font-bold text-sm px-6 py-4 rounded-2xl transition-colors disabled:opacity-60 ${
+            mobile
+              ? "border-2 border-[#AB9FF2] text-[#7C6FCD] hover:bg-purple-50"
+              : "bg-[#AB9FF2] hover:bg-[#9b8ee8] text-white shadow-sm shadow-purple-200"
+          }`}
+        >
+          {loading && !mobile
+            ? <span className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"/>
+            : <PhantomLogo size={22}/>}
+          {mobile ? "Connect (in-app browser)" : (phantomReady ? "Connect Phantom" : "Install Phantom")}
+        </motion.button>
+
+        {/* Status pill — desktop only */}
+        {!mobile && (
+          <div className={`flex items-center justify-center gap-2 text-xs font-sans px-3 py-2 rounded-xl border ${
+            phantomReady
+              ? "bg-emerald-50 border-emerald-200 text-emerald-700"
+              : "bg-amber-50 border-amber-200 text-amber-700"
+          }`}>
+            <div className={`w-1.5 h-1.5 rounded-full ${phantomReady ? "bg-emerald-500 animate-pulse" : "bg-amber-500"}`}/>
+            {phantomReady ? "Phantom extension detected — ready" : "Phantom extension not found"}
+          </div>
+        )}
+
+        {!mobile && !phantomReady && (
+          <p className="font-sans text-xs text-gray-400">
+            <a href="https://phantom.app" target="_blank" rel="noopener noreferrer" className="text-purple-500 hover:underline font-medium">
+              Download Phantom extension →
+            </a>
+            {" "}then refresh.
+          </p>
+        )}
+
+        <p className="font-sans text-xs text-gray-400 mt-1">
+          🔒 Read-only. Your keys never leave your device.
+        </p>
       </div>
-
-      <motion.button onClick={onConnect} disabled={loading}
-        whileHover={{ scale:1.04 }} whileTap={{ scale:0.97 }}
-        className="flex items-center gap-3 bg-[#AB9FF2] hover:bg-[#9b8ee8] text-white font-sans font-bold text-sm px-8 py-3.5 rounded-2xl transition-colors shadow-sm shadow-purple-200 disabled:opacity-60 mb-4">
-        {loading
-          ? <span className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"/>
-          : <PhantomLogo size={20}/>}
-        {loading ? "Waiting for approval…" : phantomReady ? "Connect Phantom" : "Install Phantom"}
-      </motion.button>
-
-      {!phantomReady && (
-        <p className="font-sans text-xs text-gray-400">
-          Phantom not detected.{" "}
-          <a href="https://phantom.app" target="_blank" rel="noopener noreferrer"
-            className="text-purple-500 hover:underline font-medium">
-            Download the extension →
-          </a>
-          {" "}then refresh this page.
-        </p>
-      )}
-
-      {phantomReady && (
-        <p className="font-sans text-xs text-gray-400">
-          Your keys never leave your device. TokenShield is read-only.
-        </p>
-      )}
     </div>
   );
 }
 
-// ─── Page ─────────────────────────────────────────────────────────────────────
+// ─── Main Page ────────────────────────────────────────────────────────────────
 export default function DashboardPage() {
   const [wallet, setWallet] = useState<WalletState>({
-    connected: false, publicKey: null, loading: false, error: null, phantomReady: false,
+    connected: false, publicKey: null, loading: false, error: null, phantomReady: false, connectMethod: null,
   });
   const [assets, setAssets]           = useState<Asset[]>([]);
   const [fetchingData, setFetchingData] = useState(false);
   const [sortKey, setSortKey]          = useState<SortKey>("valueUsd");
   const [sortAsc, setSortAsc]          = useState(false);
   const [filterRisk, setFilterRisk]    = useState<RiskLevel | "All">("All");
+  const [onMobile, setOnMobile]        = useState(false);
 
-  // ── Detect Phantom on mount ──────────────────────────────────────────────
+  // ── Detect environment on mount ──────────────────────────────────────────
   useEffect(() => {
-    getPhantom().then(p => {
+    const mobile = isMobile();
+    setOnMobile(mobile);
+
+    // Check for phantom extension / in-app browser
+    waitForPhantom(mobile ? 1500 : 3000).then(p => {
       setWallet(w => ({ ...w, phantomReady: !!p }));
 
-      // If already connected (trusted), re-connect silently
+      // Auto-reconnect if already trusted
       if (p) {
         p.connect({ onlyIfTrusted: true })
-          .then(resp => {
+          .then((resp: { publicKey: { toString: () => string } }) => {
             const pubkey = resp.publicKey.toString();
-            setWallet(w => ({ ...w, connected: true, publicKey: pubkey, phantomReady: true }));
+            const method: ConnectMethod = mobile && isPhantomInAppBrowser() ? "in-app" : "extension";
+            setWallet(w => ({ ...w, connected:true, publicKey:pubkey, phantomReady:true, connectMethod:method }));
             loadWalletData(pubkey);
           })
-          .catch(() => { /* not previously connected — that's fine */ });
+          .catch(() => {}); // not previously connected
       }
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── Connect ──────────────────────────────────────────────────────────────
-  const connectPhantom = useCallback(async () => {
-    setWallet(w => ({ ...w, loading: true, error: null }));
-    const phantom = await getPhantom();
+  // ── Listen for account changes ───────────────────────────────────────────
+  useEffect(() => {
+    let phantom: any = null;
+    waitForPhantom(2000).then(p => {
+      if (!p) return;
+      phantom = p;
+      const handler = (pubkey: any) => {
+        if (pubkey?.toString) {
+          const key = pubkey.toString();
+          setWallet(w => ({ ...w, publicKey:key }));
+          loadWalletData(key);
+        } else {
+          disconnectWallet();
+        }
+      };
+      p.on("accountChanged", handler);
+    });
+    return () => { phantom?.off?.("accountChanged", () => {}); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
+  // ── Connect via extension (or in-app browser) ────────────────────────────
+  const connectExtension = useCallback(async () => {
+    setWallet(w => ({ ...w, loading:true, error:null }));
+    const phantom = await waitForPhantom(2000);
     if (!phantom) {
-      // Open install page and stop
+      // On desktop: open install page. On mobile inside Phantom: shouldn't happen.
       window.open("https://phantom.app", "_blank", "noopener,noreferrer");
-      setWallet(w => ({ ...w, loading: false, phantomReady: false }));
+      setWallet(w => ({ ...w, loading:false }));
       return;
     }
-
     try {
       const resp = await phantom.connect();
       const pubkey = resp.publicKey.toString();
-      setWallet({ connected: true, publicKey: pubkey, loading: false, error: null, phantomReady: true });
+      const method: ConnectMethod = onMobile && isPhantomInAppBrowser() ? "in-app" : "extension";
+      setWallet({ connected:true, publicKey:pubkey, loading:false, error:null, phantomReady:true, connectMethod:method });
       await loadWalletData(pubkey);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Connection rejected";
-      // User rejected — not an install issue
-      setWallet(w => ({ ...w, loading: false, error: `Connection failed: ${msg}` }));
+    } catch (err: any) {
+      setWallet(w => ({ ...w, loading:false, error:`Connection rejected: ${err?.message ?? "unknown error"}` }));
     }
+  }, [onMobile]);
+
+  // ── Connect via Phantom mobile deep link (browse) ────────────────────────
+  // This redirects the user into Phantom's in-app browser at the current URL.
+  // Once inside, window.solana is available and they tap "Connect (in-app browser)".
+  const connectMobile = useCallback(() => {
+    setWallet(w => ({ ...w, loading:true, error:null }));
+    const link = buildPhantomBrowseLink();
+    // Small delay so the loading state renders before navigation
+    setTimeout(() => { window.location.href = link; }, 200);
   }, []);
 
   // ── Disconnect ───────────────────────────────────────────────────────────
   const disconnectWallet = useCallback(async () => {
-    const phantom = await getPhantom();
+    const phantom = await waitForPhantom(1000);
     await phantom?.disconnect().catch(() => {});
-    setWallet(w => ({ ...w, connected: false, publicKey: null, error: null }));
+    setWallet(w => ({ ...w, connected:false, publicKey:null, error:null, connectMethod:null }));
     setAssets([]);
   }, []);
 
-  // ── Load data ────────────────────────────────────────────────────────────
+  // ── Load on-chain data ───────────────────────────────────────────────────
   const loadWalletData = useCallback(async (pubkey: string) => {
     setFetchingData(true);
     try {
-      const nativeMint = "So11111111111111111111111111111111111111112";
       const [solBalance, tokenAccounts] = await Promise.all([
         getSolBalance(pubkey),
         getTokenAccounts(pubkey),
       ]);
-      const mints = [nativeMint, ...tokenAccounts.map(t => t.mint)];
+
+      const mints = [NATIVE_SOL_MINT, ...tokenAccounts.map(t => t.mint)];
       const dexData = await fetchDexBatch(mints);
 
       const rawAssets: Omit<Asset, "allocation">[] = [];
 
       // Native SOL
-      const solDex = dexData[nativeMint];
       if (solBalance > 0.001) {
-        const r = computeRisk(solDex?.liquidity??0, solDex?.volume24h??0, nativeMint);
+        const solDex = dexData[NATIVE_SOL_MINT];
+        const r = computeRisk(solDex?.liquidity??0, solDex?.volume24h??0, NATIVE_SOL_MINT);
         rawAssets.push({
-          id:"sol-native", symbol:"SOL", name:"Solana", chain:"Solana", mintAddress:nativeMint,
+          id:"sol-native", symbol:"SOL", name:"Solana", chain:"Solana", mintAddress:NATIVE_SOL_MINT,
           balance:solBalance, decimals:9,
           priceUsd:solDex?.priceUsd??0, valueUsd:solBalance*(solDex?.priceUsd??0),
           priceChange24h:solDex?.change24h??0, liquidity:solDex?.liquidity??0, volume24h:solDex?.volume24h??0,
@@ -584,16 +688,16 @@ export default function DashboardPage() {
       for (const tok of tokenAccounts) {
         const dex = dexData[tok.mint];
         const value = tok.amount * (dex?.priceUsd??0);
-        if (value < 0.01 && !dex) continue;
+        if (value < 0.01 && !dex) continue; // hide valueless dust with no market data
         const r = computeRisk(dex?.liquidity??0, dex?.volume24h??0, tok.mint);
         rawAssets.push({
           id:tok.mint, symbol:dex?.symbol??tok.mint.slice(0,6),
-          name:dex?.name??`Token ${tok.mint.slice(0,8)}…`, chain:"Solana", mintAddress:tok.mint,
+          name:dex?.name??`Unknown (${tok.mint.slice(0,8)}…)`, chain:"Solana", mintAddress:tok.mint,
           balance:tok.amount, decimals:tok.decimals,
           priceUsd:dex?.priceUsd??0, valueUsd:value,
           priceChange24h:dex?.change24h??0, liquidity:dex?.liquidity??0, volume24h:dex?.volume24h??0,
           riskLevel:r.risk, riskScore:r.score,
-          isVerified:KNOWN_SAFE[tok.mint]!==undefined, dexUrl:dex?.dexUrl,
+          isVerified:!!KNOWN_SAFE[tok.mint], dexUrl:dex?.dexUrl,
         });
       }
 
@@ -611,27 +715,7 @@ export default function DashboardPage() {
     }
   }, []);
 
-  // Listen for Phantom account changes
-  useEffect(() => {
-    let phantom: Awaited<ReturnType<typeof getPhantom>> = null;
-    getPhantom().then(p => {
-      phantom = p;
-      if (!p) return;
-      const handler = (pubkey: unknown) => {
-        if (pubkey && typeof pubkey === "object" && "toString" in pubkey) {
-          const key = (pubkey as { toString: () => string }).toString();
-          setWallet(w => ({ ...w, publicKey:key }));
-          loadWalletData(key);
-        } else {
-          disconnectWallet();
-        }
-      };
-      p.on("accountChanged", handler);
-    });
-    return () => { phantom?.off("accountChanged", () => {}); };
-  }, [loadWalletData, disconnectWallet]);
-
-  // ── Derived ──────────────────────────────────────────────────────────────
+  // ── Derived values ───────────────────────────────────────────────────────
   const totalValue  = assets.reduce((s,a) => s+a.valueUsd, 0);
   const healthScore = assets.length
     ? Math.round(assets.reduce((s,a) => s+(a.allocation/100)*(100-a.riskScore), 0))
@@ -655,7 +739,7 @@ export default function DashboardPage() {
       <th className="py-3 px-4 text-left cursor-pointer select-none" onClick={() => toggleSort(sKey)}>
         <div className="flex items-center gap-1">
           <span className={`font-sans text-xs font-bold uppercase tracking-wide transition-colors ${active?"text-emerald-600":"text-gray-400"}`}>{label}</span>
-          <span className={active && !sortAsc ? "rotate-180" : ""}>
+          <span className={active && !sortAsc ? "rotate-180 inline-block" : "inline-block"}>
             <ChevronIcon className={`w-3 h-3 ${active?"text-emerald-600":"text-gray-300"}`}/>
           </span>
         </div>
@@ -670,7 +754,7 @@ export default function DashboardPage() {
     <div className="min-h-screen bg-gray-50">
       {/* Nav */}
       <nav className="sticky top-0 z-50 bg-white border-b border-gray-100">
-        <div className="max-w-[1360px] mx-auto px-6 h-14 flex items-center justify-between">
+        <div className="max-w-[1360px] mx-auto px-4 sm:px-6 h-14 flex items-center justify-between">
           <a href="/" className="flex items-center gap-2.5">
             <div className="w-7 h-7 bg-emerald-600 rounded-lg flex items-center justify-center flex-shrink-0">
               <ShieldIcon className="w-4 h-4 text-white"/>
@@ -692,33 +776,33 @@ export default function DashboardPage() {
             ))}
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 sm:gap-3">
             {isConnected && wallet.publicKey ? (
-              <div className="flex items-center gap-2.5">
-                <div className="hidden sm:flex items-center gap-1.5 bg-purple-50 border border-purple-200 rounded-full px-3 py-1.5">
+              <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5 bg-purple-50 border border-purple-200 rounded-full px-2.5 py-1.5">
                   <PhantomLogo size={14}/>
                   <span className="font-mono text-xs text-purple-700">{shortKey(wallet.publicKey)}</span>
-                  <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse ml-1"/>
+                  <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse ml-0.5"/>
                 </div>
                 <button onClick={disconnectWallet}
-                  className="font-sans text-xs text-gray-400 hover:text-gray-700 border border-gray-200 hover:border-gray-300 px-3 py-1.5 rounded-full transition-colors">
+                  className="font-sans text-xs text-gray-400 hover:text-gray-700 border border-gray-200 px-2.5 py-1.5 rounded-full transition-colors">
                   Disconnect
                 </button>
               </div>
             ) : (
-              <button onClick={connectPhantom} disabled={wallet.loading}
-                className="flex items-center gap-2 font-sans text-xs font-bold bg-[#AB9FF2] hover:bg-[#9b8ee8] text-white px-4 py-2 rounded-full transition-colors disabled:opacity-60 shadow-sm shadow-purple-100">
+              <button onClick={onMobile ? connectMobile : connectExtension} disabled={wallet.loading}
+                className="flex items-center gap-2 font-sans text-xs font-bold bg-[#AB9FF2] hover:bg-[#9b8ee8] text-white px-3 py-2 rounded-full transition-colors disabled:opacity-60 shadow-sm">
                 {wallet.loading
                   ? <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin"/>
                   : <PhantomLogo size={14}/>}
-                {wallet.loading ? "Connecting…" : "Connect Phantom"}
+                {wallet.loading ? "Connecting…" : onMobile ? "Open Phantom" : "Connect"}
               </button>
             )}
           </div>
         </div>
       </nav>
 
-      <div className="max-w-[1360px] mx-auto px-6 py-8">
+      <div className="max-w-[1360px] mx-auto px-4 sm:px-6 py-6 sm:py-8">
 
         {/* Error banner */}
         <AnimatePresence>
@@ -732,34 +816,27 @@ export default function DashboardPage() {
         </AnimatePresence>
 
         {/* Page header */}
-        <motion.div initial={{ opacity:0, y:16 }} animate={{ opacity:1, y:0 }} transition={{ duration:0.5, ease:EASE }}
-          className="mb-7">
+        <motion.div initial={{ opacity:0, y:16 }} animate={{ opacity:1, y:0 }} transition={{ duration:0.5, ease:EASE }} className="mb-6">
           <p className="font-sans text-xs font-bold text-emerald-600 tracking-widest uppercase mb-1.5">Safety Dashboard</p>
           <div className="flex items-start justify-between gap-4 flex-wrap">
             <div>
-              <h1 className="font-display font-bold text-gray-900 text-3xl tracking-tight leading-tight">
-                Portfolio Risk Overview
-              </h1>
+              <h1 className="font-display font-bold text-gray-900 text-2xl sm:text-3xl tracking-tight leading-tight">Portfolio Risk Overview</h1>
               <p className="font-sans text-gray-400 text-sm mt-1">
                 {isConnected
                   ? isLoading ? "Loading your Solana wallet…"
-                  : assets.length > 0 ? (
-                    <span>{assets.length} assets · Total{" "}
-                      <span className="font-semibold text-gray-700">{fmtUsd(totalValue)}</span>
-                    </span>
-                  ) : "No assets found in this wallet"
-                  : "Connect your Phantom wallet to load real holdings"}
+                  : assets.length > 0
+                    ? <span>{assets.length} assets · <span className="font-semibold text-gray-700">{fmtUsd(totalValue)}</span> total</span>
+                    : "No assets found"
+                  : "Connect Phantom to see real holdings"}
               </p>
             </div>
-            {isConnected && (
+            {isConnected && !isLoading && assets.length > 0 && (
               <div className="flex items-center gap-2">
-                <button onClick={() => wallet.publicKey && loadWalletData(wallet.publicKey)}
-                  disabled={isLoading}
+                <button onClick={() => wallet.publicKey && loadWalletData(wallet.publicKey)} disabled={isLoading}
                   className="flex items-center gap-1.5 font-sans text-xs font-medium border border-gray-200 hover:bg-gray-50 text-gray-600 px-3 py-2 rounded-xl transition-colors disabled:opacity-50">
-                  🔄 {isLoading ? "Refreshing…" : "Refresh"}
+                  🔄 Refresh
                 </button>
-                <a href="/advisor-page"
-                  className="flex items-center gap-1.5 font-sans text-xs font-medium bg-gray-900 hover:bg-gray-800 text-white px-3 py-2 rounded-xl transition-colors">
+                <a href="/advisor-page" className="flex items-center gap-1.5 font-sans text-xs font-medium bg-gray-900 hover:bg-gray-800 text-white px-3 py-2 rounded-xl transition-colors">
                   💬 AI Advisor
                 </a>
               </div>
@@ -770,19 +847,23 @@ export default function DashboardPage() {
         {/* NOT CONNECTED */}
         {!isConnected && (
           <div className="bg-white border border-gray-100 rounded-2xl">
-            <EmptyState onConnect={connectPhantom} loading={wallet.loading} phantomReady={wallet.phantomReady}/>
+            <ConnectScreen
+              onConnectExtension={connectExtension}
+              onConnectMobile={connectMobile}
+              loading={wallet.loading}
+              phantomReady={wallet.phantomReady}
+              mobile={onMobile}
+            />
           </div>
         )}
 
-        {/* LOADING SKELETON */}
+        {/* LOADING */}
         {isConnected && isLoading && (
           <div className="space-y-5">
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
               {[1,2,3].map(i => (
                 <div key={i} className="bg-white border border-gray-100 rounded-2xl p-6 space-y-4">
-                  <Skeleton className="h-4 w-32"/>
-                  <Skeleton className="h-40 w-full"/>
-                  <Skeleton className="h-4 w-48"/>
+                  <Skeleton className="h-4 w-32"/><Skeleton className="h-40 w-full"/><Skeleton className="h-4 w-48"/>
                 </div>
               ))}
             </div>
@@ -796,15 +877,13 @@ export default function DashboardPage() {
         {/* DATA */}
         {isConnected && !isLoading && assets.length > 0 && (
           <>
-            {/* Top row */}
+            {/* Top cards */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 mb-5">
               <motion.div initial={{ opacity:0, y:20 }} animate={{ opacity:1, y:0 }} transition={{ delay:0.08, ease:EASE }}
                 className="bg-white border border-gray-100 rounded-2xl p-6 flex flex-col items-center gap-2">
                 <p className="font-display font-bold text-gray-800 text-sm self-start">Wallet health score</p>
                 <HealthDial score={healthScore}/>
-                <p className="font-sans text-xs text-gray-400 text-center leading-relaxed max-w-[180px]">
-                  Weighted by allocation × inverse risk across all positions
-                </p>
+                <p className="font-sans text-xs text-gray-400 text-center leading-relaxed max-w-[180px]">Weighted by allocation × inverse risk across all positions</p>
               </motion.div>
 
               <motion.div initial={{ opacity:0, y:20 }} animate={{ opacity:1, y:0 }} transition={{ delay:0.14, ease:EASE }}
@@ -818,10 +897,10 @@ export default function DashboardPage() {
                 <p className="font-display font-bold text-gray-800 text-sm mb-5">Key metrics</p>
                 <div className="grid grid-cols-2 gap-x-4 gap-y-5 mb-4">
                   {[
-                    { label:"Total value",   value:fmtUsd(totalValue),     color:"text-gray-900" },
-                    { label:"Health score",  value:`${healthScore}/100`,   color:healthScore>=70?"text-emerald-600":"text-amber-600" },
-                    { label:"Assets",        value:`${assets.length}`,     color:"text-gray-900" },
-                    { label:"Verified",      value:`${assets.filter(a=>a.isVerified).length}/${assets.length}`, color:"text-emerald-600" },
+                    { label:"Total value",  value:fmtUsd(totalValue),  color:"text-gray-900" },
+                    { label:"Health score", value:`${healthScore}/100`, color:healthScore>=70?"text-emerald-600":"text-amber-600" },
+                    { label:"Assets",       value:`${assets.length}`,   color:"text-gray-900" },
+                    { label:"Verified",     value:`${assets.filter(a=>a.isVerified).length}/${assets.length}`, color:"text-emerald-600" },
                   ].map(m => (
                     <div key={m.label} className="flex flex-col gap-0.5">
                       <span className="font-sans text-xs text-gray-400">{m.label}</span>
@@ -831,9 +910,9 @@ export default function DashboardPage() {
                 </div>
                 <div className="pt-4 border-t border-gray-100 space-y-2">
                   {(() => {
-                    const best   = [...assets].sort((a,b) => b.priceChange24h-a.priceChange24h)[0];
-                    const worst  = [...assets].sort((a,b) => a.priceChange24h-b.priceChange24h)[0];
-                    const risky  = [...assets].sort((a,b) => b.riskScore-a.riskScore)[0];
+                    const best  = [...assets].sort((a,b)=>b.priceChange24h-a.priceChange24h)[0];
+                    const worst = [...assets].sort((a,b)=>a.priceChange24h-b.priceChange24h)[0];
+                    const risky = [...assets].sort((a,b)=>b.riskScore-a.riskScore)[0];
                     return (
                       <>
                         <div className="flex justify-between text-xs">
@@ -855,13 +934,13 @@ export default function DashboardPage() {
               </motion.div>
             </div>
 
-            {/* Table */}
+            {/* Asset Table */}
             <motion.div initial={{ opacity:0, y:16 }} animate={{ opacity:1, y:0 }} transition={{ delay:0.28, ease:EASE }}
               className="bg-white border border-gray-100 rounded-2xl overflow-hidden mb-5">
               <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 flex-wrap gap-3">
                 <div>
                   <h2 className="font-display font-bold text-gray-900 text-sm">Portfolio positions</h2>
-                  <p className="font-sans text-xs text-gray-400 mt-0.5">Live prices from DexScreener · Click headers to sort</p>
+                  <p className="font-sans text-xs text-gray-400 mt-0.5">Live prices from DexScreener · Tap headers to sort</p>
                 </div>
                 <div className="flex items-center gap-1.5 flex-wrap">
                   {(["All","Safe","Low","Medium","High","Critical","Unknown"] as const).map(f => (
@@ -880,11 +959,11 @@ export default function DashboardPage() {
                   <thead className="bg-gray-50/80 border-b border-gray-100">
                     <tr>
                       <th className="py-3 pl-5 pr-4 text-left font-sans text-xs font-bold uppercase tracking-wide text-gray-400">Asset</th>
-                      <SortTh label="Allocation" sKey="allocation"/>
-                      <SortTh label="Value"      sKey="valueUsd"/>
-                      <SortTh label="24h"        sKey="priceChange24h"/>
+                      <SortTh label="Alloc" sKey="allocation"/>
+                      <SortTh label="Value" sKey="valueUsd"/>
+                      <SortTh label="24h"   sKey="priceChange24h"/>
                       <th className="py-3 px-4 text-left font-sans text-xs font-bold uppercase tracking-wide text-gray-400">Liquidity</th>
-                      <SortTh label="Risk"       sKey="riskScore"/>
+                      <SortTh label="Risk"  sKey="riskScore"/>
                       <th className="py-3 pl-4 pr-5 text-left font-sans text-xs font-bold uppercase tracking-wide text-gray-400">Actions</th>
                     </tr>
                   </thead>
@@ -894,10 +973,10 @@ export default function DashboardPage() {
                 </table>
               </div>
               <div className="flex items-center justify-between px-5 py-3 border-t border-gray-100 bg-gray-50/40">
-                <span className="font-sans text-xs text-gray-400">{sortedAssets.length} positions shown</span>
+                <span className="font-sans text-xs text-gray-400">{sortedAssets.length} positions · tokens without price data are hidden</span>
                 <div className="flex items-center gap-1.5">
                   <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"/>
-                  <span className="font-sans text-xs text-gray-400">Live · DexScreener</span>
+                  <span className="font-sans text-xs text-gray-400">DexScreener · Live</span>
                 </div>
               </div>
             </motion.div>
@@ -910,7 +989,7 @@ export default function DashboardPage() {
             <span className="text-4xl">🪙</span>
             <p className="font-display font-bold text-gray-800 text-lg">No tokens found</p>
             <p className="font-sans text-sm text-gray-400 text-center max-w-sm leading-relaxed">
-              This wallet has no Solana SPL tokens with a positive balance, or all are dust amounts below $0.01.
+              This wallet has no Solana tokens with a balance above $0.01, or DexScreener has no price data for them.
             </p>
             <button onClick={() => wallet.publicKey && loadWalletData(wallet.publicKey)}
               className="font-sans text-xs font-medium border border-gray-200 hover:bg-gray-50 text-gray-600 px-4 py-2 rounded-xl transition-colors">
