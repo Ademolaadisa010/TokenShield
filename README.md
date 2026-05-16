@@ -1,36 +1,196 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# TokenShield 🛡️
 
-## Getting Started
+AI-powered Web3 safety platform that helps crypto users analyze tokens, detect risks, avoid scams, and make smarter trading decisions before interacting with digital assets.
 
-First, run the development server:
+---
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+## 🚀 Overview
+
+TokenShield is built to protect traders from common crypto risks such as:
+
+* Low liquidity tokens
+* Honeypots & scam contracts
+* Whale manipulation
+* Fake hype & emotional trading (FOMO)
+* Unsafe approvals and risky token behavior
+
+Instead of only showing raw blockchain data, TokenShield uses AI to explain token risks in simple human language.
+
+---
+
+## ✨ Features
+
+### 🔍 Token Analysis
+
+Analyze any token in real time and get:
+
+* Liquidity data
+* Trading volume
+* Buy/Sell activity
+* Market behavior insights
+* Risk indicators
+
+---
+
+### 🛡️ AI Risk Detection
+
+TokenShield detects:
+
+* Low liquidity risks
+* Suspicious token behavior
+* Potential honeypots
+* Whale concentration
+* Unsafe market activity
+
+---
+
+### 🧠 AI Trade Advisor
+
+AI explains:
+
+* Why a token may be risky
+* Liquidity concerns
+* Volatility warnings
+* Trading safety recommendations
+
+---
+
+### ⚠️ FOMO Protection
+
+Helps traders avoid emotional decisions by warning users before high-risk or impulsive trades.
+
+---
+
+### 🔗 Wallet Integration
+
+Connect your wallet to:
+
+* Analyze portfolio exposure
+* Detect risky assets
+* Monitor wallet safety
+
+---
+
+## 🏗️ Tech Stack
+
+### Frontend
+
+* Next.js
+* React
+* Tailwind CSS
+* TypeScript
+
+### AI
+
+* Gemini 2.5
+
+### APIs
+
+* DexScreener API
+* Solscan API
+* GoPlus Security API
+
+### Web3
+
+* Ethers.js / Solana Web3.js
+* Wallet Adapter / Wagmi
+
+---
+
+## 📊 How It Works
+
+```txt
+User searches token
+        ↓
+Fetch market & blockchain data
+        ↓
+Analyze liquidity & security signals
+        ↓
+AI explains risks in simple language
+        ↓
+TokenShield displays risk score & warnings
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+---
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## 🎯 Mission
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Crypto users lose billions yearly due to scams, poor risk analysis, and emotional trading decisions.
 
-## Learn More
+TokenShield aims to become the safety layer of Web3 by helping users:
 
-To learn more about Next.js, take a look at the following resources:
+* Understand blockchain risks
+* Trade responsibly
+* Avoid scams and unsafe assets
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+---
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## 🔥 Example AI Output
 
-## Deploy on Vercel
+```txt
+Risk Level: HIGH ⚠️
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+- Liquidity is low and unstable
+- Whale wallets control a large percentage of supply
+- Trading activity appears highly volatile
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Recommendation:
+Proceed with caution before interacting with this token.
+```
+
+---
+
+## 📌 Future Features
+
+* Wallet health scanner
+* AI transaction translator
+* Suspicious approval detection
+* Phishing website protection
+* Whale movement alerts
+* Real-time security notifications
+
+---
+
+## 🛠️ Installation
+
+```bash
+git clone https://github.com/yourusername/tokenshield.git
+
+cd tokenshield
+
+npm install
+
+npm run dev
+```
+
+---
+
+## 🌐 Environment Variables
+
+Create a `.env.local` file:
+
+```env
+NEXT_PUBLIC_GEMINI_API_KEY=your_api_key
+NEXT_PUBLIC_DEXSCREENER_API=https://api.dexscreener.com
+NEXT_PUBLIC_SOLSCAN_API=https://public-api.solscan.io
+```
+
+---
+
+## 🤝 Contributing
+
+Contributions, suggestions, and improvements are welcome.
+
+Feel free to fork the project and submit a pull request.
+
+---
+
+## 📄 License
+
+MIT License
+
+---
+
+## 🛡️ TokenShield
+
+**Don’t just trade without verifying.**
